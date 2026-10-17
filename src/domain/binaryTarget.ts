@@ -544,7 +544,7 @@ const machArchitecture = (cpu: number): HeaderArchitecture | undefined => {
   return undefined;
 };
 
-const elfArchitecture = (
+export const elfArchitecture = (
   machine: number,
 ): Exclude<BinaryArchitecture, RawOnlyArchitecture> | undefined => {
   switch (machine) {

@@ -144,3 +144,44 @@ export const twoSentinelElf = (): {
 
 export const sentinelFreeMacho = (): Buffer =>
   thinMacho(0x0100000c, Buffer.from("no fuse wire in this image"));
+
+export const structuredElfFuseImage = (
+  machine: number,
+  fuses: readonly number[],
+  class_ = 2,
+  endian = 1,
+): { readonly bytes: Buffer; readonly sentinelOffset: number } => {
+  const header = Buffer.alloc(class_ === 1 ? 52 : 64);
+  header.set([0x7f, 0x45, 0x4c, 0x46, class_, endian, 1]);
+  if (endian === 1) {
+    header.writeUInt16LE(machine, 18);
+    header.writeUInt32LE(1, 20);
+    header.writeUInt16LE(class_ === 1 ? 52 : 64, class_ === 1 ? 40 : 52);
+  } else {
+    header.writeUInt16BE(machine, 18);
+    header.writeUInt32BE(1, 20);
+    header.writeUInt16BE(class_ === 1 ? 52 : 64, class_ === 1 ? 40 : 52);
+  }
+  return {
+    bytes: Buffer.concat([header, FUSE_SENTINEL, fuseWire(1, fuses)]),
+    sentinelOffset: header.length,
+  };
+};
+
+export const structuredPeFuseImage = (
+  machine: number,
+  fuses: readonly number[],
+  offset = 0x80,
+): { readonly bytes: Buffer; readonly sentinelOffset: number } => {
+  const header = Buffer.alloc(offset);
+  header.write("MZ", 0, "ascii");
+  header.writeUInt32LE(offset, 0x3c);
+  const peHeader = Buffer.alloc(6);
+  peHeader.write("PE\0\0", 0, "binary");
+  peHeader.writeUInt16LE(machine, 4);
+  const body = Buffer.concat([peHeader, FUSE_SENTINEL, fuseWire(1, fuses)]);
+  return {
+    bytes: Buffer.concat([header, body]),
+    sentinelOffset: offset + peHeader.length,
+  };
+};

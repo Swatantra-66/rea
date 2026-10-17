@@ -112,10 +112,12 @@ describe("Electron fuse wire reading", () => {
 
     const peReport = await inspect(join(root, "app.exe"));
     expect(peReport.artifact.format).toBe("pe");
+    expect(peReport.slices[0]?.architecture).toBeNull();
     expect(peReport.slices[0]?.sentinels[0]?.sentinel_offset).toBe(
       pe.sentinelOffset,
     );
     const elfReport = await inspect(join(root, "app.elf"));
+    expect(elfReport.slices[0]?.architecture).toBeNull();
     expect(elfReport.slices[0]?.sentinels[0]?.fuses).toMatchObject([
       { name: "RunAsNode", state: "enabled", raw_byte: 0x31 },
       { name: "EnableCookieEncryption", state: "removed", raw_byte: 0x72 },

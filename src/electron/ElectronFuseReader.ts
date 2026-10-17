@@ -14,6 +14,9 @@ import {
   type ElectronFuseSentinel,
   type ElectronFuseSlice,
 } from "../domain/electron/electronFuses.js";
+import { elfArchitecture } from "../domain/binaryTarget.js";
+import { readElfFixedHeader } from "../domain/elfFixedHeader.js";
+import { decodePeMachine } from "../domain/peMachine.js";
 import {
   RegularFileChangedError,
   sameRegularFileState,
@@ -211,16 +214,9 @@ const identifyContainer = async (
 }> => {
   const head = await readAt(0, Math.min(size, 8));
   if (hasMachoMagic(head)) return identifyMacho(readAt, size, head, path);
-  if (isElf(head))
-    return {
-      format: "elf",
-      slices: [{ index: 0, fileOffset: 0, size, architecture: null }],
-    };
-  if (await isPe(readAt, size))
-    return {
-      format: "pe",
-      slices: [{ index: 0, fileOffset: 0, size, architecture: null }],
-    };
+  if (isElf(head)) return identifyElf(readAt, size);
+  const pe = await identifyPe(readAt, size);
+  if (pe !== undefined) return pe;
   throw new ElectronFuseFormatFailure(
     "unsupported",
     `Selected artifact ${path} does not contain a Mach-O, ELF, or PE container.`,
@@ -458,31 +454,94 @@ const isFat = (head: Uint8Array): boolean => {
   return FAT_MAGICS.has(magic);
 };
 
-const isPe = async (readAt: ReadAt, size: number): Promise<boolean> => {
-  if (size < 64) return false;
+const identifyElf = async (
+  readAt: ReadAt,
+  size: number,
+): Promise<{
+  readonly format: "elf";
+  readonly slices: readonly SliceRange[];
+}> => {
+  let architecture: string | null = null;
+  if (size >= 20) {
+    const headerBytes = await readAt(0, Math.min(size, 64));
+    if (headerBytes.length >= 20) {
+      const fixedHeader = readElfFixedHeader(
+        Buffer.from(
+          headerBytes.buffer,
+          headerBytes.byteOffset,
+          headerBytes.byteLength,
+        ),
+        size,
+      );
+      if (fixedHeader.ok) {
+        const little = fixedHeader.value.byteOrder === "little";
+        const view = new DataView(
+          headerBytes.buffer,
+          headerBytes.byteOffset,
+          headerBytes.byteLength,
+        );
+        const machine = view.getUint16(18, little);
+        architecture = elfArchitecture(machine) ?? null;
+      }
+    }
+  }
+  return {
+    format: "elf",
+    slices: [{ index: 0, fileOffset: 0, size, architecture }],
+  };
+};
+
+const identifyPe = async (
+  readAt: ReadAt,
+  size: number,
+): Promise<
+  | {
+      readonly format: "pe";
+      readonly slices: readonly SliceRange[];
+    }
+  | undefined
+> => {
+  if (size < 64) return undefined;
   const header = await readAt(0, 64);
   if (header.length < 64 || header[0] !== 0x4d || header[1] !== 0x5a)
-    return false;
-  const offset = Buffer.from(
+    return undefined;
+  const view = new DataView(
     header.buffer,
     header.byteOffset,
     header.byteLength,
-  ).readUInt32LE(0x3c);
+  );
+  const offset = view.getUint32(0x3c, true);
   if (
     !Number.isSafeInteger(offset) ||
     offset < 64 ||
     offset > ELECTRON_FUSE_LIMITS.maximumPeHeaderOffset ||
     offset > size - 4
   )
-    return false;
-  const signature = await readAt(offset, 4);
-  return (
-    signature.length === 4 &&
-    signature[0] === 0x50 &&
-    signature[1] === 0x45 &&
-    signature[2] === 0 &&
-    signature[3] === 0
-  );
+    return undefined;
+  const peHeader = await readAt(offset, Math.min(6, size - offset));
+  if (
+    peHeader.length < 4 ||
+    peHeader[0] !== 0x50 ||
+    peHeader[1] !== 0x45 ||
+    peHeader[2] !== 0 ||
+    peHeader[3] !== 0
+  )
+    return undefined;
+
+  let architecture: string | null = null;
+  if (peHeader.length >= 6) {
+    const peView = new DataView(
+      peHeader.buffer,
+      peHeader.byteOffset,
+      peHeader.byteLength,
+    );
+    const machineType = peView.getUint16(4, true);
+    architecture = decodePeMachine(machineType)?.architecture ?? null;
+  }
+  return {
+    format: "pe",
+    slices: [{ index: 0, fileOffset: 0, size, architecture }],
+  };
 };
 
 const isMissingPath = (cause: unknown): boolean =>

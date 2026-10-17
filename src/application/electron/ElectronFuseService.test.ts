@@ -69,3 +69,35 @@ it("preserves malformed fuse output ahead of late cancellation", async () => {
   expect(invalid.ok).toBe(false);
   if (!invalid.ok) expect(invalid.error).toBeInstanceOf(AnalysisOutputError);
 });
+
+it("preserves detected ELF and PE architectures in the Evidence subject", async () => {
+  const elfReport: ElectronFuseReport = {
+    ...report,
+    artifact: { ...report.artifact, format: "elf" },
+    slices: [{ ...report.slices[0]!, architecture: "x86_64" }],
+  };
+  const result = await new ElectronFuseService({
+    identity,
+    inspect: async () => ok(elfReport),
+  }).inspect({ path: elfReport.artifact.selected_path });
+  expect(result.ok).toBe(true);
+  if (result.ok) {
+    const evidence = parseEvidence(result.value);
+    expect(evidence.subject?.architecture).toBe("x86_64");
+  }
+
+  const peReport: ElectronFuseReport = {
+    ...report,
+    artifact: { ...report.artifact, format: "pe" },
+    slices: [{ ...report.slices[0]!, architecture: "arm64" }],
+  };
+  const peResult = await new ElectronFuseService({
+    identity,
+    inspect: async () => ok(peReport),
+  }).inspect({ path: peReport.artifact.selected_path });
+  expect(peResult.ok).toBe(true);
+  if (peResult.ok) {
+    const evidence = parseEvidence(peResult.value);
+    expect(evidence.subject?.architecture).toBe("arm64");
+  }
+});
